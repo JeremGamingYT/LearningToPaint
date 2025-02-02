@@ -128,9 +128,10 @@ class ResNet(nn.Module):
 
 # Environment
 class PaintEnvironment:
-    def __init__(self, batch_size, max_step, data_path):
+    def __init__(self, batch_size, max_step, data_path, renderer):
         self.batch_size = batch_size
         self.max_step = max_step
+        self.renderer = renderer
         self.action_space = 13
         self.width = width
         self.img_train = []
@@ -203,7 +204,7 @@ class PaintEnvironment:
         return torch.cat([self.canvas.float()/255, self.gt.float()/255, T.float()/self.max_step, coord], dim=1)
 
     def step(self, action):
-        canvas = decode(action, self.canvas.float()/255) * 255
+        canvas = decode(action, self.canvas.float()/255, self.renderer) * 255
         self.stepnum += 1
         reward = self.cal_reward(canvas)
         self.canvas = canvas.byte()
@@ -237,7 +238,8 @@ class ReplayBuffer:
         return len(self.buffer)
 
 class DDPG:
-    def __init__(self, batch_size=64, max_step=40, tau=0.001, gamma=0.95, buffer_size=1000000):
+    def __init__(self, batch_size=64, max_step=40, tau=0.001, gamma=0.95, buffer_size=1000000, renderer=None):
+        self.renderer = renderer
         self.actor = ResNet(BasicBlock, [2,2,2,2]).to(device)
         self.actor_target = ResNet(BasicBlock, [2,2,2,2]).to(device)
         self.actor_optimizer = Adam(self.actor.parameters(), lr=1e-4)
@@ -251,8 +253,6 @@ class DDPG:
         self.tau = tau
         self.gamma = gamma
         self.max_step = max_step
-        self.renderer = FCN().to(device)
-        self.renderer.load_state_dict(torch.load('renderer.pkl'))
         
         hard_update(self.actor_target, self.actor)
         hard_update(self.critic_target, self.critic)
@@ -295,9 +295,9 @@ class DDPG:
         
         return actor_loss.item(), critic_loss.item()
 
-def decode(x, canvas):
+def decode(x, canvas, renderer):
     x = x.view(-1, 13)
-    stroke = 1 - FCN()(x[:, :10])
+    stroke = 1 - renderer(x[:, :10])
     stroke = stroke.view(-1, 128, 128, 1)
     color_stroke = stroke * x[:, -3:].view(-1, 1, 1, 3)
     stroke = stroke.permute(0, 3, 1, 2)
@@ -315,11 +315,14 @@ def hard_update(target, source):
         target_param.data.copy_(param.data)
 
 def train(data_path, max_step=40, batch_size=64, episodes=10000, renderer_path='renderer.pkl'):
-    env = PaintEnvironment(batch_size, max_step, data_path)
-    agent = DDPG(batch_size, max_step)
+    renderer = FCN().to(device)
+    renderer.load_state_dict(torch.load(renderer_path))
+    
+    env = PaintEnvironment(batch_size, max_step, data_path, renderer)
+    agent = DDPG(batch_size, max_step, renderer=renderer)
+    
     writer = tb.SummaryWriter()
     
-
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
