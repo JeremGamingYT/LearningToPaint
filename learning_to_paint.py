@@ -128,43 +128,66 @@ class ResNet(nn.Module):
 
 # Environment
 class PaintEnvironment:
-    def __init__(self, batch_size, max_step):
+    def __init__(self, batch_size, max_step, data_path):
         self.batch_size = batch_size
         self.max_step = max_step
         self.action_space = 13
         self.width = width
         self.img_train = []
         self.img_test = []
-        self.load_data()
+        self.load_data(data_path)
         self.canvas = torch.zeros((batch_size, 3, width, width), device=device)
         self.gt = None
         self.tot_reward = None
         self.stepnum = 0
 
-    def load_data(self):
-        for i in range(200000):
-            img_id = f'{i+1:06d}'
-            try:
-                img = cv2.imread(f'data/img_align_celeba/{img_id}.jpg')
-                img = cv2.resize(img, (width, width))
-                if i > 2000:
-                    self.img_train.append(img)
-                else:
-                    self.img_test.append(img)
-            except:
-                pass
+    def load_data(self, data_path):
+        image_extensions = ['.jpg', '.jpeg', '.png', '.webp']
+        all_images = []
+        
+        for root, dirs, files in os.walk(data_path):
+            for file in files:
+                if any(file.lower().endswith(ext) for ext in image_extensions):
+                    all_images.append(os.path.join(root, file))
 
-    def pre_data(self, id, test=False):
-        img = self.img_test[id] if test else self.img_train[id]
-        img = transforms.ToPILImage()(img)
-        img = transforms.RandomHorizontalFlip()(img)
-        return torch.tensor(np.array(img).transpose(2, 0, 1)).to(device)
+        random.shuffle(all_images)
+        test_split = int(0.1 * len(all_images))
+        
+        self.img_test = all_images[:test_split]
+        self.img_train = all_images[test_split:]
+
+    def pre_data(self, img_path, test=False):
+        try:
+            img = cv2.imread(img_path)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (width, width))
+            
+            if not test:
+                img = transforms.ToPILImage()(img)
+                img = transforms.RandomHorizontalFlip()(img)
+                img = transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2)(img)
+                img = np.array(img)
+            
+            return torch.tensor(img).permute(2, 0, 1).to(device)
+        except Exception as e:
+            print(f"Error loading {img_path}: {str(e)}")
+            return None
 
     def reset(self, test=False, begin_num=0):
         self.gt = torch.zeros((self.batch_size, 3, width, width), device=device)
-        for i in range(self.batch_size):
-            id = (i + begin_num) % len(self.img_test) if test else np.random.randint(len(self.img_train))
-            self.gt[i] = self.pre_data(id, test)
+        valid_count = 0
+        
+        while valid_count < self.batch_size:
+            if test:
+                img_path = self.img_test[(begin_num + valid_count) % len(self.img_test)]
+            else:
+                img_path = random.choice(self.img_train)
+            
+            img_tensor = self.pre_data(img_path, test)
+            if img_tensor is not None:
+                self.gt[valid_count] = img_tensor
+                valid_count += 1
+        
         self.tot_reward = (self.gt.float() / 255).pow(2).mean(dim=(1,2,3))
         self.stepnum = 0
         self.canvas = torch.zeros_like(self.gt)
@@ -291,11 +314,12 @@ def hard_update(target, source):
     for target_param, param in zip(target.parameters(), source.parameters()):
         target_param.data.copy_(param.data)
 
-def train(max_step=40, batch_size=64, episodes=10000, renderer_path='renderer.pkl'):
-    env = PaintEnvironment(batch_size, max_step)
+def train(data_path, max_step=40, batch_size=64, episodes=10000, renderer_path='renderer.pkl'):
+    env = PaintEnvironment(batch_size, max_step, data_path)
     agent = DDPG(batch_size, max_step)
     writer = tb.SummaryWriter()
     
+
     for episode in range(episodes):
         state = env.reset()
         total_reward = 0
@@ -325,6 +349,8 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--episodes', type=int, default=10000)
     parser.add_argument('--renderer', type=str, default='renderer.pkl')
+    parser.add_argument('--data_path', type=str, required=True, 
+                      help="Path to anime images dataset folder")
     args = parser.parse_args()
     
-    train(args.max_step, args.batch_size, args.episodes, args.renderer) 
+    train(args.data_path, args.max_step, args.batch_size, args.episodes, args.renderer)
