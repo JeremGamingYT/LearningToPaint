@@ -267,8 +267,7 @@ class DDPG:
 
     def update(self):
         if len(self.buffer) < self.batch_size:
-            return
-        
+            return 0, 0  # Retourne des pertes nulles si pas d'update
         states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
         with torch.no_grad():
