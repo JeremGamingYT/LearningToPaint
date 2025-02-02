@@ -16,6 +16,11 @@ import tensorboardX as tb
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 width = 128
 
+# Fonction utilitaire pour aplatir un batch imbriqué
+def flatten_batch(x):
+    B, E = x.shape[:2]
+    return x.view(B * E, *x.shape[2:])
+
 # Neural Renderer
 class FCN(nn.Module):
     def __init__(self):
@@ -278,30 +283,42 @@ class DDPG:
     def update(self):
         if len(self.buffer) < self.batch_size:
             return 0, 0  # Retourne des pertes nulles si pas d'update
+
         states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
+        # Aplatir les deux premières dimensions
+        states = flatten_batch(states)       # Résultat: (batch_size * env_batch, 9, 128, 128)
+        next_states = flatten_batch(next_states)
+        actions = actions.view(-1, actions.shape[-1])  # Par exemple, actions était de forme (B, E, 65) -> (B*E, 65)
+        rewards = rewards.view(-1, 1)
+        dones = dones.view(-1, 1)
+
         with torch.no_grad():
-            next_actions = self.actor_target(next_states)
-            target_q = self.critic_target(torch.cat([next_states, next_actions], dim=1))
-            target_q = rewards + (1 - dones.float()) * self.gamma * target_q
-        
-        current_q = self.critic(torch.cat([states, actions], dim=1))
+            # Ici, on passe next_states aplati à l'acteur cible
+            next_actions = self.actor_target(next_states)  # Attention : next_states est désormais 4D
+            current_canvas = next_states[:, :3, :, :]  # les 3 premiers canaux correspondent au canvas
+            decoded_next_actions = decode(next_actions, current_canvas.float()/255, self.renderer)
+            critic_input_next = torch.cat([next_states, decoded_next_actions], dim=1)
+            target_q = rewards + (1 - dones.float()) * self.gamma * self.critic_target(critic_input_next)
+
+        critic_input_current = torch.cat([states, actions.view(states.size(0), -1)], dim=1)
+        current_q = self.critic(critic_input_current)
         critic_loss = F.mse_loss(current_q, target_q)
-        
+
         self.critic_optimizer.zero_grad()
         critic_loss.backward()
         self.critic_optimizer.step()
-        
+
         actor_actions = self.actor(states)
-        actor_loss = -self.critic(torch.cat([states, actor_actions], dim=1)).mean()
-        
+        actor_loss = -self.critic(torch.cat([states, actor_actions.view(states.size(0), -1)], dim=1)).mean()
+
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         self.actor_optimizer.step()
-        
+
         soft_update(self.actor_target, self.actor, self.tau)
         soft_update(self.critic_target, self.critic, self.tau)
-        
+
         return actor_loss.item(), critic_loss.item()
 
 def decode(x, canvas, renderer):
