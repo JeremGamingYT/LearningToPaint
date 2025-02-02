@@ -296,14 +296,15 @@ class DDPG:
         return actor_loss.item(), critic_loss.item()
 
 def decode(x, canvas, renderer):
-    x = x.view(-1, 13)
-    stroke = 1 - renderer(x[:, :10])
-    stroke = stroke.view(-1, 128, 128, 1)
-    color_stroke = stroke * x[:, -3:].view(-1, 1, 1, 3)
-    stroke = stroke.permute(0, 3, 1, 2)
-    color_stroke = color_stroke.permute(0, 3, 1, 2)
-    for _ in range(5):
-        canvas = canvas * (1 - stroke) + color_stroke
+    strokes = x.view(x.size(0), -1, 13)  # ici, x.size(0) est le batch_size (64)
+    for i in range(strokes.size(1)):  # strokes.size(1) correspond au nombre de strokes (ici 5)
+         stroke_params = strokes[:, i, :]  # Forme : (batch_size, 13)
+         stroke = 1 - renderer(stroke_params[:, :10])
+         stroke = stroke.view(-1, 128, 128, 1)  # On ajoute une dimension pour les canaux
+         color_stroke = stroke * stroke_params[:, -3:].view(-1, 1, 1, 3)
+         stroke = stroke.permute(0, 3, 1, 2)         # Résultat : (batch_size, 1, 128, 128)
+         color_stroke = color_stroke.permute(0, 3, 1, 2)  # Résultat : (batch_size, 3, 128, 128)
+         canvas = canvas * (1 - stroke) + color_stroke
     return canvas
 
 def soft_update(target, source, tau):
