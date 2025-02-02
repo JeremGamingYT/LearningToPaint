@@ -289,21 +289,22 @@ class DDPG:
         states, actions, rewards, next_states, dones = self.buffer.sample(self.batch_size)
         
         # Aplatir les deux premières dimensions
-        states = flatten_batch(states)       # Résultat: (batch_size * env_batch, 9, 128, 128)
+        states = flatten_batch(states)       # (B * env_batch, 9, 128, 128)
         next_states = flatten_batch(next_states)
-        actions = actions.view(-1, actions.shape[-1])  # Par exemple, actions était de forme (B, E, 65) -> (B*E, 65)
+        actions = actions.view(-1, actions.shape[-1])  # (B * env_batch, 65)
         rewards = rewards.view(-1, 1)
         dones = dones.view(-1, 1)
 
         with torch.no_grad():
-            # Ici, on passe next_states aplati à l'acteur cible
-            next_actions = self.actor_target(next_states)  # Attention : next_states est désormais 4D
-            current_canvas = next_states[:, :3, :, :]  # les 3 premiers canaux correspondent au canvas
+            next_actions = self.actor_target(next_states)
+            current_canvas = next_states[:, :3, :, :]
             decoded_next_actions = decode(next_actions, current_canvas.float()/255, self.renderer)
             critic_input_next = torch.cat([next_states, decoded_next_actions], dim=1)
             target_q = rewards + (1 - dones.float()) * self.gamma * self.critic_target(critic_input_next)
 
-        critic_input_current = torch.cat([states, actions.view(states.size(0), -1)], dim=1)
+        # Pour le critic courant : décoder l'action stockée
+        decoded_current_actions = decode(actions, states[:, :3, :, :].float()/255, self.renderer)
+        critic_input_current = torch.cat([states, decoded_current_actions], dim=1)
         current_q = self.critic(critic_input_current)
         critic_loss = F.mse_loss(current_q, target_q)
 
@@ -311,8 +312,11 @@ class DDPG:
         critic_loss.backward()
         self.critic_optimizer.step()
 
+        # Pour la perte de l'acteur, recalculer l'action à partir de l'état et décoder
         actor_actions = self.actor(states)
-        actor_loss = -self.critic(torch.cat([states, actor_actions.view(states.size(0), -1)], dim=1)).mean()
+        decoded_actor_actions = decode(actor_actions, states[:, :3, :, :].float()/255, self.renderer)
+        critic_input_actor = torch.cat([states, decoded_actor_actions], dim=1)
+        actor_loss = -self.critic(critic_input_actor).mean()
 
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
