@@ -213,7 +213,9 @@ class PaintEnvironment:
         self.stepnum += 1
         reward = self.cal_reward(canvas)
         self.canvas = canvas.byte()
-        done = self.stepnum >= self.max_step
+        # On calcule le flag done pour chaque élément du batch :
+        done_scalar = self.stepnum >= self.max_step
+        done = torch.full((self.batch_size,), float(done_scalar), device=device, dtype=torch.float32)
         return self.observation(), reward, done, None
 
     def cal_reward(self, canvas):
@@ -259,8 +261,8 @@ class DDPG:
         self.actor_target = ResNet(BasicBlock, [2,2,2,2]).to(device)
         self.actor_optimizer = Adam(self.actor.parameters(), lr=1e-4)
         
-        self.critic = torch.nn.DataParallel(ResNet(BasicBlock, [2,2,2,2], num_inputs=12)).to(device)
-        self.critic_target = ResNet(BasicBlock, [2,2,2,2], num_inputs=12).to(device)
+        self.critic = torch.nn.DataParallel(ResNet(BasicBlock, [2,2,2,2], num_inputs=12, num_outputs=1)).to(device)
+        self.critic_target = ResNet(BasicBlock, [2,2,2,2], num_inputs=12, num_outputs=1).to(device)
         self.critic_optimizer = Adam(self.critic.parameters(), lr=1e-3)
         
         self.buffer = ReplayBuffer(buffer_size)
