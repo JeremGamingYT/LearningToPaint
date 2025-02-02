@@ -223,16 +223,26 @@ class ReplayBuffer:
         self.position = 0
 
     def push(self, state, action, reward, next_state, done):
+        state_cpu = state.detach().cpu()
+        action_cpu = action.detach().cpu()
+        reward_cpu = reward.detach().cpu()
+        next_state_cpu = next_state.detach().cpu()
+        # Convertir 'done' en tenseur (de type float ou bool selon vos besoins)
+        done_cpu = torch.tensor(done, dtype=torch.float32)
+        
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.buffer[self.position] = (state_cpu, action_cpu, reward_cpu, next_state_cpu, done_cpu)
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
-        return (torch.stack(states), torch.stack(actions), torch.stack(rewards), 
-                torch.stack(next_states), torch.stack(dones))
+        return (torch.stack(states).to(device),
+                torch.stack(actions).to(device),
+                torch.stack(rewards).to(device),
+                torch.stack(next_states).to(device),
+                torch.stack(dones).to(device))
 
     def __len__(self):
         return len(self.buffer)
@@ -240,11 +250,11 @@ class ReplayBuffer:
 class DDPG:
     def __init__(self, batch_size=64, max_step=40, tau=0.001, gamma=0.95, buffer_size=1000000, renderer=None):
         self.renderer = renderer
-        self.actor = ResNet(BasicBlock, [2,2,2,2]).to(device)
+        self.actor = torch.nn.DataParallel(ResNet(BasicBlock, [2,2,2,2])).to(device)
         self.actor_target = ResNet(BasicBlock, [2,2,2,2]).to(device)
         self.actor_optimizer = Adam(self.actor.parameters(), lr=1e-4)
         
-        self.critic = ResNet(BasicBlock, [2,2,2,2], num_inputs=12).to(device)
+        self.critic = torch.nn.DataParallel(ResNet(BasicBlock, [2,2,2,2], num_inputs=12)).to(device)
         self.critic_target = ResNet(BasicBlock, [2,2,2,2], num_inputs=12).to(device)
         self.critic_optimizer = Adam(self.critic.parameters(), lr=1e-3)
         
